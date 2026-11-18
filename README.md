@@ -3,7 +3,8 @@
 在 `gemini.google.com` 网页端右下角常驻一只 Q 版二次元桌宠，头顶带有一个经典思考气泡，实时显示 **5 小时剩余额度、每周剩余额度、重置倒计时与当前上下文 Token 占用**，并内置 **AI 实时上下文吐槽大脑**、**多 API Key 轮询**与物理果冻 Q 弹互动。
 
 > 💡 **预览截图**：
->
+><img width="800" height="400" alt="image" src="https://github.com/user-attachments/assets/f0dbfea7-a48a-4472-b9e6-e004c7933048" />
+
 *
 *
 
