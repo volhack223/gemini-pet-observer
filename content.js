@@ -1,12 +1,13 @@
 (() => {
   const isIframe = window.self !== window.top;
 
-  // 解析 /usage 页面上的真实百分比和重置时间
   function parseAndSyncUsageText(rawText) {
-    if (!rawText || rawText.length < 20) return false;
+    if (!rawText) return false;
+    if (rawText.length < 20) return false;
 
-    const usedMatches = [...rawText.matchAll(/(?:已使用|Used)\s*(\d{1,3}(?:\.\d+)?)\s*%/gi)]
-      .map(m => parseFloat(m[1]));
+    const cnMatches = [...rawText.matchAll(/已使用\s*(\d{1,3}(?:\.\d+)?)\s*%/g)].map(m => parseFloat(m[1]));
+    const enMatches = [...rawText.matchAll(/Used\s*(\d{1,3}(?:\.\d+)?)\s*%/gi)].map(m => parseFloat(m[1]));
+    const usedMatches = cnMatches.length > 0 ? cnMatches : enMatches;
 
     if (usedMatches.length === 0) return false;
 
@@ -33,12 +34,15 @@
     }
 
     chrome.storage.local.get(['geminiPetState'], (res) => {
-      const cur = res.geminiPetState || {};
+      const cur = res.geminiPetState ? res.geminiPetState : {};
+      const nextReset = resetCountdownStr
+        ? resetCountdownStr
+        : (cur.resetCountdownStr ? cur.resetCountdownStr : '');
       const updated = {
         ...cur,
         exactFiveHourPct: curRemain,
         weeklyRemainPct: weeklyRemain,
-        resetCountdownStr: resetCountdownStr || cur.resetCountdownStr || '',
+        resetCountdownStr: nextReset,
         lastSyncAt: Date.now()
       };
       chrome.storage.local.set({ geminiPetState: updated }, () => {
@@ -56,7 +60,11 @@
     const usageTimer = setInterval(() => {
       tries++;
       const ok = parseAndSyncUsageText(document.body.innerText);
-      if (ok || tries > 25) clearInterval(usageTimer);
+      if (ok) {
+        clearInterval(usageTimer);
+      } else if (tries > 25) {
+        clearInterval(usageTimer);
+      }
     }, 400);
     if (isIframe) return;
   } else if (isIframe) {
@@ -64,6 +72,17 @@
   }
 
   if (document.getElementById('gemini-pet-observer-host')) return;
+
+  const PRESETS = {
+    google: {
+      apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      model: 'gemini-2.5-flash-lite'
+    },
+    deepseek: {
+      apiUrl: 'https://api.deepseek.com/chat/completions',
+      model: 'deepseek-chat'
+    }
+  };
 
   const DEFAULT_STATE = {
     modelTitle: 'Gemini 4 Pro 5h 额度',
@@ -76,12 +95,20 @@
     bubbleVisible: true
   };
 
+  const DEFAULT_AI_CONFIG = {
+    enabled: false,
+    apiUrl: PRESETS.google.apiUrl,
+    apiKeys: '',
+    model: PRESETS.google.model
+  };
+
   let state = { ...DEFAULT_STATE };
+  let aiConfig = { ...DEFAULT_AI_CONFIG };
   let isSyncing = false;
   let lastTriggerTime = 0;
+  let lastClickAiTime = 0;
   let syncTimeoutGuard = null;
 
-  // 预加载 4 张 WebP 表情，切换零延迟不闪烁
   const SPRITES = {
     idle: chrome.runtime.getURL('idle.webp'),
     xd: chrome.runtime.getURL('xd.webp'),
@@ -93,20 +120,23 @@
     img.src = url;
   });
 
-  // 卖萌台词库
   const CUTE_LINES = [
     '喵呜~ 别戳啦，要被戳成布丁了！',
     '嘿嘿，被你发现我在偷偷摸鱼了 (＞◡＜)',
     '当前额度还很充足哦，放心大胆聊吧~',
     '啊呜啊呜… 刚才的回答味道还不错！',
     '再戳的话… 本喵就要把你的额度全吃掉咯！',
-    '干嘛呀，是不是想夸我今天很可爱？',
-    '双击我可以收起或展开头顶的额度气泡哦~'
+    '右键点我可以配置 Google 免费 AI 吐槽大脑哦~'
   ];
 
-  let tempSprite = null;      // 临时表情 ('xd' | 'grin' | null)
+  let tempSprite = null;
   let tempSpriteTimer = null;
   let voiceHideTimer = null;
+
+  function countKeys(raw) {
+    if (!raw) return 0;
+    return String(raw).split(/[\r\n,，;；]+/).map(s => s.trim()).filter(Boolean).length;
+  }
 
   function removeSyncIframe() {
     const oldFrame = document.getElementById('gemini-usage-sync-frame');
@@ -122,8 +152,21 @@
     }
   });
 
-  chrome.storage.local.get(['geminiPetState'], (res) => {
-    if (res.geminiPetState) state = { ...DEFAULT_STATE, ...res.geminiPetState };
+  chrome.storage.local.get(['geminiPetState', 'petAiConfig'], (res) => {
+    if (res.geminiPetState) {
+      state = { ...DEFAULT_STATE, ...res.geminiPetState };
+    }
+    if (res.petAiConfig) {
+      const savedKeys = res.petAiConfig.apiKeys
+        ? res.petAiConfig.apiKeys
+        : (res.petAiConfig.apiKey ? res.petAiConfig.apiKey : '');
+      aiConfig = {
+        ...DEFAULT_AI_CONFIG,
+        ...res.petAiConfig,
+        apiKeys: savedKeys
+      };
+    }
+    fillConfigForm();
     renderUI();
     if (!location.pathname.startsWith('/usage')) {
       setTimeout(() => triggerSilentSync(true), 2000);
@@ -134,6 +177,16 @@
     if (changes.geminiPetState && changes.geminiPetState.newValue) {
       state = { ...state, ...changes.geminiPetState.newValue };
       renderUI();
+    }
+    if (changes.petAiConfig && changes.petAiConfig.newValue) {
+      const nv = changes.petAiConfig.newValue;
+      const savedKeys = nv.apiKeys ? nv.apiKeys : (nv.apiKey ? nv.apiKey : '');
+      aiConfig = {
+        ...DEFAULT_AI_CONFIG,
+        ...nv,
+        apiKeys: savedKeys
+      };
+      fillConfigForm();
     }
   });
 
@@ -169,7 +222,6 @@
     syncTimeoutGuard = setTimeout(removeSyncIframe, 10000);
   }
 
-  // 创建 Shadow DOM UI
   const host = document.createElement('div');
   host.id = 'gemini-pet-observer-host';
   host.style.cssText = 'position:fixed;bottom:0;right:16px;z-index:2147483647;pointer-events:none;font-family:"PingFang SC","Microsoft YaHei",sans-serif;';
@@ -179,38 +231,18 @@
 
   shadow.innerHTML = `
     <style>
-      .wrapper {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        user-select: none;
-      }
-      /* 额度思考气泡 */
+      .wrapper { position: relative; display: flex; flex-direction: column; align-items: flex-end; user-select: none; }
       .bubble-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        margin-right: 28px;
-        margin-bottom: -6px;
-        pointer-events: auto;
+        display: flex; flex-direction: column; align-items: center;
+        margin-right: 28px; margin-bottom: -6px; pointer-events: auto;
         transition: opacity 0.25s ease, transform 0.25s ease;
       }
-      .bubble-container.hidden {
-        opacity: 0;
-        transform: translateY(10px) scale(0.95);
-        pointer-events: none;
-      }
+      .bubble-container.hidden { opacity: 0; transform: translateY(10px) scale(0.95); pointer-events: none; }
       .main-oval {
-        background: #ffffff;
-        border: 4.5px solid #202a5c;
-        border-radius: 50%;
-        padding: 18px 34px;
-        text-align: center;
+        background: #ffffff; border: 4.5px solid #202a5c; border-radius: 50%;
+        padding: 18px 34px; text-align: center;
         box-shadow: 0 6px 20px rgba(32, 42, 92, 0.14);
-        min-width: 245px;
-        cursor: pointer;
-        transition: transform 0.12s ease;
+        min-width: 245px; cursor: pointer; transition: transform 0.12s ease;
       }
       .main-oval:active { transform: scale(0.96); }
       .title { font-size: 13px; font-weight: 700; color: #202a5c; margin-bottom: 2px; }
@@ -223,37 +255,38 @@
       .dot-1 { width: 22px; height: 14px; background: #fff; border: 4px solid #202a5c; border-radius: 50%; margin-top: 4px; margin-left: 55px; }
       .dot-2 { width: 14px; height: 9px; background: #fff; border: 3.5px solid #202a5c; border-radius: 50%; margin-top: 3px; margin-left: 88px; }
 
-      /* 桌宠区域 + 果冻弹性动画 */
-      .pet-stage {
-        position: relative;
-        display: flex;
-        align-items: flex-end;
-        justify-content: flex-end;
-      }
-      /* 小人左侧卖萌台词气泡 */
+      .pet-stage { position: relative; display: flex; align-items: flex-end; justify-content: flex-end; }
       .voice-bubble {
         position: absolute;
-        right: 138px;
-        bottom: 42px;
+        right: 146px;
+        bottom: 28px;
+        width: max-content;
+        max-width: 240px;
+        min-width: 72px;
+        writing-mode: horizontal-tb;
+        text-align: left;
         background: #ffffff;
         color: #202a5c;
         border: 2.5px solid #202a5c;
         border-radius: 14px;
-        padding: 7px 12px;
-        font-size: 12px;
+        padding: 8px 13px;
+        font-size: 12.5px;
         font-weight: 700;
-        white-space: nowrap;
-        box-shadow: 0 4px 12px rgba(32, 42, 92, 0.16);
+        line-height: 1.45;
+        white-space: normal;
+        word-break: break-word;
+        box-shadow: 0 4px 14px rgba(32, 42, 92, 0.2);
         opacity: 0;
-        transform: translateX(8px) scale(0.9);
+        transform: translateX(8px) scale(0.92);
         pointer-events: none;
         transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+        z-index: 5;
       }
       .voice-bubble::after {
         content: '';
         position: absolute;
         right: -7px;
-        bottom: 12px;
+        bottom: 14px;
         width: 10px;
         height: 10px;
         background: #ffffff;
@@ -261,37 +294,63 @@
         border-top: 2.5px solid #202a5c;
         transform: rotate(45deg);
       }
-      .voice-bubble.show {
-        opacity: 1;
-        transform: translateX(0) scale(1);
+      .voice-bubble.show { opacity: 1; transform: translateX(0) scale(1); }
+
+      .settings-card {
+        position: absolute; right: 146px; bottom: 12px; width: 290px;
+        background: #ffffff; color: #1f2937;
+        border: 3px solid #202a5c; border-radius: 14px;
+        padding: 12px 14px; box-shadow: 0 10px 28px rgba(32, 42, 92, 0.28);
+        pointer-events: auto; display: none; flex-direction: column; gap: 8px;
+        font-size: 12px; z-index: 20;
       }
+      .settings-card.open { display: flex; }
+      .settings-head { display: flex; justify-content: space-between; align-items: center; font-weight: 800; color: #202a5c; font-size: 13px; }
+      .preset-row { display: flex; gap: 6px; }
+      .preset-btn {
+        flex: 1; background: #eef2ff; color: #202a5c; border: 1.5px solid #c7d2fe;
+        border-radius: 6px; padding: 4px 6px; font-size: 11px; font-weight: 700;
+        cursor: pointer; transition: background 0.15s;
+      }
+      .preset-btn:hover { background: #e0e7ff; }
+      .settings-row { display: flex; flex-direction: column; gap: 3px; }
+      .label-line { display: flex; justify-content: space-between; align-items: center; }
+      .settings-row label { font-weight: 600; color: #4b5563; font-size: 11.5px; }
+      .key-badge { font-size: 10.5px; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 1px 6px; border-radius: 99px; }
+      .settings-row input[type="text"], .settings-row textarea {
+        border: 1.5px solid #cbd5e1; border-radius: 6px; padding: 5px 8px;
+        font-size: 11.5px; outline: none; color: #111827; background: #f8fafc;
+        font-family: ui-monospace, Consolas, monospace;
+      }
+      .settings-row textarea { resize: vertical; min-height: 54px; line-height: 1.35; }
+      .settings-row input:focus, .settings-row textarea:focus { border-color: #202a5c; background: #ffffff; }
+      .switch-line { display: flex; align-items: center; justify-content: space-between; font-weight: 700; color: #202a5c; }
+      .test-result {
+        font-size: 11px; line-height: 1.35; padding: 6px 8px; border-radius: 6px;
+        background: #f1f5f9; color: #334155; display: none; word-break: break-all;
+      }
+      .test-result.show { display: block; }
+      .test-result.ok { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+      .test-result.err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+      .btn-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 2px; }
+      .btn-test { background: #eff6ff; color: #1d4ed8; border: 1.5px solid #93c5fd; border-radius: 6px; padding: 4px 10px; font-weight: 700; cursor: pointer; font-size: 11.5px; }
+      .btn-test:hover { background: #dbeafe; }
+      .btn-save { background: #202a5c; color: #fff; border: none; border-radius: 6px; padding: 5px 12px; font-weight: 700; cursor: pointer; font-size: 12px; }
+      .btn-cancel { background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 5px 10px; font-weight: 600; cursor: pointer; font-size: 12px; }
 
       .pet-box {
-        width: 138px;
-        height: 138px;
-        pointer-events: auto;
-        cursor: pointer;
-        display: flex;
-        align-items: flex-end;
-        justify-content: center;
-        transform-origin: bottom center;
+        width: 138px; height: 138px; pointer-events: auto; cursor: pointer;
+        display: flex; align-items: flex-end; justify-content: center; transform-origin: bottom center;
       }
       .pet-box img {
-        max-width: 100%;
-        max-height: 100%;
-        object-fit: contain;
+        max-width: 100%; max-height: 100%; object-fit: contain;
         filter: drop-shadow(0 2px 6px rgba(0,0,0,0.16));
         transform-origin: bottom center;
         animation: idleBreath 3.2s ease-in-out infinite;
       }
-      /* 吃 Token 生成中的咀嚼晃动 */
-      .pet-box.eating img {
-        animation: eatingMunch 0.55s ease-in-out infinite;
-      }
-      /* 果冻被点击 Q 弹关键帧 */
-      .pet-box.jelly img {
-        animation: jellyBounce 0.65s cubic-bezier(0.28, 0.84, 0.42, 1) forwards !important;
-      }
+      .pet-box.eating img { animation: eatingMunch 0.55s ease-in-out infinite; }
+      .pet-box.jelly img { animation: jellyBounce 0.65s cubic-bezier(0.28, 0.84, 0.42, 1) forwards !important; }
 
       @keyframes idleBreath {
         0%, 100% { transform: scale(1, 1); }
@@ -326,8 +385,46 @@
       </div>
 
       <div class="pet-stage">
-        <div class="voice-bubble" id="voice-bubble">喵呜~ 别戳啦！</div>
-        <div class="pet-box" id="pet-btn" title="单击戳一戳互动 · 双击隐藏/显示额度气泡">
+        <div class="voice-bubble" id="voice-bubble">喵呜~</div>
+
+        <div class="settings-card" id="settings-card">
+          <div class="settings-head">
+            <span>🐾 AI 实时互动大脑配置</span>
+          </div>
+          <div class="preset-row">
+            <button class="preset-btn" id="preset-google" type="button">填入 Google 免费版</button>
+            <button class="preset-btn" id="preset-deepseek" type="button">填入 DeepSeek</button>
+          </div>
+          <div class="switch-line">
+            <span>启用对话与点击实时吐槽</span>
+            <input type="checkbox" id="cfg-enabled" />
+          </div>
+          <div class="settings-row">
+            <label>API 接口地址 (OpenAI 兼容)</label>
+            <input type="text" id="cfg-url" placeholder="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" />
+          </div>
+          <div class="settings-row">
+            <div class="label-line">
+              <label>API Keys (每行一个，自动轮询)</label>
+              <span class="key-badge" id="key-count-badge">0 个 Key</span>
+            </div>
+            <textarea id="cfg-keys" placeholder="AIzaSy... (支持粘贴多个 Key，每行一个或逗号分隔)"></textarea>
+          </div>
+          <div class="settings-row">
+            <label>模型名称</label>
+            <input type="text" id="cfg-model" placeholder="gemini-2.5-flash-lite" />
+          </div>
+          <div class="test-result" id="test-result"></div>
+          <div class="btn-row">
+            <button class="btn-test" id="cfg-test" type="button">测试连接</button>
+            <div style="display:flex;gap:6px;">
+              <button class="btn-cancel" id="cfg-cancel" type="button">取消</button>
+              <button class="btn-save" id="cfg-save" type="button">保存生效</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pet-box" id="pet-btn" title="单击戳一戳 · 双击隐藏气泡 · 右键配置 AI 吐槽">
           <img id="pet-img" src="${SPRITES.idle}" alt="Pet" />
         </div>
       </div>
@@ -343,23 +440,124 @@
   const petBtnEl = shadow.getElementById('pet-btn');
   const petImgEl = shadow.getElementById('pet-img');
   const voiceBubbleEl = shadow.getElementById('voice-bubble');
+  const settingsCardEl = shadow.getElementById('settings-card');
 
-  function showVoiceLine(customText) {
+  const cfgEnabledEl = shadow.getElementById('cfg-enabled');
+  const cfgUrlEl = shadow.getElementById('cfg-url');
+  const cfgKeysEl = shadow.getElementById('cfg-keys');
+  const cfgModelEl = shadow.getElementById('cfg-model');
+  const keyCountBadgeEl = shadow.getElementById('key-count-badge');
+  const testResultEl = shadow.getElementById('test-result');
+
+  function updateKeyBadge() {
+    const n = countKeys(cfgKeysEl.value);
+    keyCountBadgeEl.textContent = n > 1 ? `${n} 个 Key (轮询)` : `${n} 个 Key`;
+  }
+
+  cfgKeysEl.addEventListener('input', updateKeyBadge);
+
+  function fillConfigForm() {
+    cfgEnabledEl.checked = Boolean(aiConfig.enabled);
+    cfgUrlEl.value = aiConfig.apiUrl ? aiConfig.apiUrl : DEFAULT_AI_CONFIG.apiUrl;
+    cfgKeysEl.value = aiConfig.apiKeys ? aiConfig.apiKeys : '';
+    cfgModelEl.value = aiConfig.model ? aiConfig.model : DEFAULT_AI_CONFIG.model;
+    updateKeyBadge();
+  }
+
+  shadow.getElementById('preset-google').addEventListener('click', () => {
+    cfgUrlEl.value = PRESETS.google.apiUrl;
+    cfgModelEl.value = PRESETS.google.model;
+    cfgEnabledEl.checked = true;
+  });
+
+  shadow.getElementById('preset-deepseek').addEventListener('click', () => {
+    cfgUrlEl.value = PRESETS.deepseek.apiUrl;
+    cfgModelEl.value = PRESETS.deepseek.model;
+    cfgEnabledEl.checked = true;
+  });
+
+  petBtnEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    testResultEl.className = 'test-result';
+    fillConfigForm();
+    settingsCardEl.classList.toggle('open');
+  });
+
+  shadow.getElementById('cfg-cancel').addEventListener('click', () => {
+    settingsCardEl.classList.remove('open');
+  });
+
+  shadow.getElementById('cfg-test').addEventListener('click', () => {
+    testResultEl.className = 'test-result show';
+    testResultEl.textContent = '⏳ 正在向接口发送测试请求...';
+
+    const testUrl = cfgUrlEl.value.trim() ? cfgUrlEl.value.trim() : DEFAULT_AI_CONFIG.apiUrl;
+    const testModel = cfgModelEl.value.trim() ? cfgModelEl.value.trim() : DEFAULT_AI_CONFIG.model;
+
+    chrome.runtime.sendMessage(
+      {
+        type: 'TEST_PET_API',
+        payload: {
+          apiUrl: testUrl,
+          apiKeys: cfgKeysEl.value,
+          model: testModel
+        }
+      },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          testResultEl.className = 'test-result show err';
+          testResultEl.textContent = `❌ 扩展后台异常: ${chrome.runtime.lastError.message}`;
+          return;
+        }
+        if (res && res.ok) {
+          testResultEl.className = 'test-result show ok';
+          testResultEl.textContent = `✅ 连接成功 (命中 Key #${res.keyIndex}/${res.totalKeys} · ${res.latencyMs}ms) 回复: "${res.reply}"`;
+        } else {
+          const errMsg = res && res.error ? res.error : '未知错误';
+          testResultEl.className = 'test-result show err';
+          testResultEl.textContent = `❌ 连接失败: ${errMsg}`;
+        }
+      }
+    );
+  });
+
+  shadow.getElementById('cfg-save').addEventListener('click', () => {
+    const savedUrl = cfgUrlEl.value.trim() ? cfgUrlEl.value.trim() : DEFAULT_AI_CONFIG.apiUrl;
+    const savedModel = cfgModelEl.value.trim() ? cfgModelEl.value.trim() : DEFAULT_AI_CONFIG.model;
+    aiConfig = {
+      enabled: cfgEnabledEl.checked,
+      apiUrl: savedUrl,
+      apiKeys: cfgKeysEl.value.trim(),
+      model: savedModel
+    };
+    chrome.storage.local.set({ petAiConfig: aiConfig }, () => {
+      settingsCardEl.classList.remove('open');
+      playJellyBounce();
+      triggerTempExpression('xd', 2200);
+      const n = countKeys(aiConfig.apiKeys);
+      showVoiceLine(
+        aiConfig.enabled ? `AI 大脑已就绪 (${n}个Key轮询中)喵！` : '已切换回本地卖萌词库~',
+        3200
+      );
+    });
+  });
+
+  function showVoiceLine(customText, durationMs = 3400) {
     const remainPct = Math.round(state.exactFiveHourPct);
     const dynamicLines = [
       ...CUTE_LINES,
       `现在还剩 ${remainPct}% 额度呢，能量满满喵！`
     ];
-    const line = customText || dynamicLines[Math.floor(Math.random() * dynamicLines.length)];
+    const line = customText ? customText : dynamicLines[Math.floor(Math.random() * dynamicLines.length)];
     voiceBubbleEl.textContent = line;
     voiceBubbleEl.classList.add('show');
     clearTimeout(voiceHideTimer);
     voiceHideTimer = setTimeout(() => {
       voiceBubbleEl.classList.remove('show');
-    }, 2800);
+    }, durationMs);
   }
 
-  function triggerTempExpression(spriteKey, durationMs = 2400) {
+  function triggerTempExpression(spriteKey, durationMs = 2600) {
     tempSprite = spriteKey;
     updatePetAppearance();
     clearTimeout(tempSpriteTimer);
@@ -371,12 +569,10 @@
 
   function playJellyBounce() {
     petBtnEl.classList.remove('jelly');
-    // 强制触发重排以重新播放动画
     void petBtnEl.offsetWidth;
     petBtnEl.classList.add('jelly');
   }
 
-  // 单击小人：果冻 Q 弹 + 随机切换 xd / grin 表情 + 弹出卖萌台词
   let clickDelayTimer = null;
   petBtnEl.addEventListener('click', () => {
     clearTimeout(clickDelayTimer);
@@ -384,11 +580,21 @@
       playJellyBounce();
       const nextExpr = Math.random() < 0.65 ? 'xd' : 'grin';
       triggerTempExpression(nextExpr, 2400);
-      showVoiceLine();
+
+      const now = Date.now();
+      const hasKeys = countKeys(aiConfig.apiKeys) > 0;
+      const canTriggerClickAi = aiConfig.enabled && hasKeys && (now - lastClickAiTime > 5000);
+
+      if (canTriggerClickAi) {
+        lastClickAiTime = now;
+        showVoiceLine('喵呜？让我想想…', 3000);
+        triggerAiPetReaction('click');
+      } else {
+        showVoiceLine();
+      }
     }, 180);
   });
 
-  // 双击小人：切换顶部额度气泡的显示/隐藏
   petBtnEl.addEventListener('dblclick', () => {
     clearTimeout(clickDelayTimer);
     state.bubbleVisible = !state.bubbleVisible;
@@ -398,7 +604,6 @@
     showVoiceLine(state.bubbleVisible ? '额度面板展开啦~' : '额度面板先藏起来咯！');
   });
 
-  // 单击额度气泡：手动立即校准
   shadow.getElementById('oval-card').addEventListener('click', () => {
     triggerSilentSync(true);
     triggerTempExpression('grin', 1600);
@@ -417,7 +622,7 @@
     if (tempSprite && SPRITES[tempSprite]) {
       targetKey = tempSprite;
     } else if (streaming) {
-      targetKey = 'eat'; // 生成回复时自动变成嚼嚼表情
+      targetKey = 'eat';
     }
 
     const targetUrl = SPRITES[targetKey];
@@ -426,10 +631,62 @@
     }
   }
 
+  function extractLatestTurnContext() {
+    const userNodes = document.querySelectorAll('user-query, .user-query-container, [data-test-id="user-query"]');
+    const aiNodes = document.querySelectorAll('model-response, .model-response-container, message-content');
+    const lastUser = userNodes.length > 0 ? userNodes[userNodes.length - 1].innerText.trim() : '';
+    const lastAi = aiNodes.length > 0 ? aiNodes[aiNodes.length - 1].innerText.trim() : '';
+    return { userText: lastUser, aiText: lastAi };
+  }
+
+  function triggerAiPetReaction(triggerType = 'reply_done') {
+    const hasKeys = countKeys(aiConfig.apiKeys) > 0;
+    let isReady = Boolean(aiConfig.enabled);
+    if (!aiConfig.apiUrl) isReady = false;
+    if (!hasKeys) isReady = false;
+
+    if (!isReady) {
+      if (triggerType === 'reply_done') {
+        triggerTempExpression('xd', 2000);
+        showVoiceLine('回答生成完毕喵~');
+      }
+      return;
+    }
+
+    const { userText, aiText } = extractLatestTurnContext();
+    if (triggerType !== 'click' && !userText && !aiText) return;
+
+    chrome.runtime.sendMessage(
+      {
+        type: 'GENERATE_PET_COMMENT',
+        payload: {
+          userText,
+          aiText,
+          remainPct: Math.round(state.exactFiveHourPct),
+          triggerType
+        }
+      },
+      (res) => {
+        if (res && res.ok && res.text) {
+          playJellyBounce();
+          const nextMood = res.mood ? res.mood : 'xd';
+          triggerTempExpression(nextMood, 4200);
+          showVoiceLine(res.text, 5000);
+        } else if (res && res.error) {
+          showVoiceLine(`⚠️ ${res.error}`, 4500);
+        } else if (triggerType === 'reply_done') {
+          triggerTempExpression('xd', 2000);
+          showVoiceLine('回答生成完毕喵~');
+        }
+      }
+    );
+  }
+
   function estimateContextTokens() {
     if (location.pathname.startsWith('/usage')) return 0;
-    const mainEl = document.querySelector('main') || document.body;
-    return Math.round((mainEl.innerText || '').length / 1.8);
+    const mainEl = document.querySelector('main') ? document.querySelector('main') : document.body;
+    const raw = mainEl.innerText ? mainEl.innerText : '';
+    return Math.round(raw.length / 1.8);
   }
 
   function renderUI() {
@@ -444,7 +701,7 @@
       titleEl.textContent = `${modelBtn.innerText.trim()} 5h 额度`;
     }
 
-    const countdown = state.resetCountdownStr || '待同步';
+    const countdown = state.resetCountdownStr ? state.resetCountdownStr : '待同步';
     resetLineEl.innerHTML = `周剩 ${Number(state.weeklyRemainPct).toFixed(1)}% · ${countdown}<span class="underline">重置</span>`;
 
     const ctxTokens = estimateContextTokens();
@@ -472,7 +729,6 @@
   let syncedResponseCount = -1;
   let lastTurnTokens = 0;
 
-  // 高频检测生成状态，让“开始输出 -> 切换 eat.webp”几乎零延迟
   setInterval(() => {
     updatePetAppearance();
   }, 500);
@@ -492,9 +748,7 @@
       syncedResponseCount = curResponses;
     } else if (curResponses > syncedResponseCount && !isAiStreaming()) {
       syncedResponseCount = curResponses;
-      // 回复刚刚生成完毕：切换成 xd (> <) 表情并弹出提示，同时无感校准额度
-      triggerTempExpression('xd', 2000);
-      showVoiceLine('回答生成完毕喵~');
+      triggerAiPetReaction('reply_done');
       setTimeout(() => triggerSilentSync(false), 1500);
     } else if (curResponses < syncedResponseCount) {
       syncedResponseCount = curResponses;
