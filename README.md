@@ -3,12 +3,11 @@
 在 `gemini.google.com` 网页端右下角常驻一只 Q 版二次元桌宠，头顶带有一个经典思考气泡，实时显示 **5 小时剩余额度、每周剩余额度、重置倒计时与当前上下文 Token 占用**，并内置 **AI 实时上下文吐槽大脑**、**多 API Key 轮询**与物理果冻 Q 弹互动。
 
 > 💡 **预览截图**：
-<img width="291" height="288" alt="image" src="https://github.com/user-attachments/assets/8ee20c6d-7fdb-4422-a799-c87a4c702cd8" />
-<img width="301" height="300" alt="image" src="https://github.com/user-attachments/assets/38f4e21d-e212-42a1-ba35-d1d5db0de44e" />
-<img width="344" height="291" alt="image" src="https://github.com/user-attachments/assets/1e983844-7ace-446a-a49d-6306ef6d8941" />
-<img width="400" height="293" alt="1994b895aac4d383ecce3249700aa683" src="https://github.com/user-attachments/assets/bdb67bab-73b0-4efb-9b82-745d0d0a701b" />
-*
-*
+| 日常待机与实时额度监控 | 戳一戳果冻 Q 弹互动 |
+| :---: | :---: |
+| <img src="https://github.com/user-attachments/assets/8ee20c6d-7fdb-4422-a799-c87a4c702cd8" height="260" alt="日常待机与实时额度监控" /> | <img src="https://github.com/user-attachments/assets/38f4e21d-e212-42a1-ba35-d1d5db0de44e" height="260" alt="戳一戳果冻Q弹互动" /> |
+| **AI 上下文实时吐槽气泡** | **右键可视化配置 & 多 Key 轮询** |
+| <img src="https://github.com/user-attachments/assets/1e983844-7ace-446a-a49d-6306ef6d8941" height="260" alt="AI上下文实时吐槽气泡" /> | <img src="https://github.com/user-attachments/assets/bdb67bab-73b0-4efb-9b82-745d0d0a701b" height="260" alt="右键可视化配置面板" /> |
 
 ## ✨ 核心特性
 
