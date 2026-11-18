@@ -2,9 +2,10 @@
 
 在 `gemini.google.com` 网页端右下角常驻一只 Q 版二次元桌宠，头顶带有一个经典思考气泡，实时显示 **5 小时剩余额度、每周剩余额度、重置倒计时与当前上下文 Token 占用**，并支持无感静默校准与物理果冻 Q 弹互动。
 
-> 💡 **预览截图**：*<img width="285" height="295" alt="image" src="https://github.com/user-attachments/assets/544b614b-2772-4d73-b19e-4b5f23dfae76" /><img width="327" height="285" alt="image" src="https://github.com/user-attachments/assets/88610b8d-5b4e-428f-aa0c-e24fc2986d05" /><img width="315" height="291" alt="image" src="https://github.com/user-attachments/assets/817e5bd8-4430-4220-b37e-d86424c476df" />
-
-
+> 💡 **预览截图**：*
+> <img width="285" height="295" alt="image" src="https://github.com/user-attachments/assets/544b614b-2772-4d73-b19e-4b5f23dfae76" />
+<img width="327" height="285" alt="image" src="https://github.com/user-attachments/assets/88610b8d-5b4e-428f-aa0c-e24fc2986d05" />
+<img width="315" height="291" alt="image" src="https://github.com/user-attachments/assets/817e5bd8-4430-4220-b37e-d86424c476df" />
 *
 
 ## ✨ 核心特性
