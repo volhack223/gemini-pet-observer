@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini 桌宠观察窗 (Gemini Pet Observer)",
+  "version": "1.4.0",
+  "description": "在 Gemini 网页端右下角常驻 Q 版二次元桌宠，支持果冻互动、生成状态表情切换，以及无感自动校准 5h/周额度与上下文占用。",
+  "icons": {
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "permissions": ["storage", "declarativeNetRequest"],
+  "host_permissions": ["https://gemini.google.com/*"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "allow_usage_iframe",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["*.webp", "*.png"],
+      "matches": ["https://gemini.google.com/*"]
+    }
+  ]
+}
