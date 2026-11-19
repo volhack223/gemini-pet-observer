@@ -12,6 +12,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err && err.message ? err.message : String(err) }));
     return true;
   }
+
+  if (msg.type === 'CHAT_WITH_PET') {
+    handlePetChat(msg.payload)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ ok: false, error: err && err.message ? err.message : String(err) }));
+    return true;
+  }
 });
 
 /* 每次点击随机抽取一种反应剧本，彻底打破复读 */
@@ -54,6 +61,16 @@ function parseApiKeys(rawKeys, fallbackSingleKey) {
     .filter(Boolean);
 }
 
+function isLocalEndpoint(apiUrl) {
+  try {
+    const u = new URL(String(apiUrl || '').trim());
+    const h = u.hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' || h === '::1' || h === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 /* 记录最近生成的台词，防止短期重复 */
 async function getRecentReplies() {
   const store = await chrome.storage.local.get(['petRecentReplies']);
@@ -67,31 +84,36 @@ async function saveRecentReply(newText) {
   await chrome.storage.local.set({ petRecentReplies: updated });
 }
 
-/* 带多 Key 轮询与自动故障转移的请求函数 */
+/* 带多 Key 轮询、自动故障转移与本地免 Key 支持的请求函数 */
 async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens = 120, temperature = 1.0 }) {
-  if (!Array.isArray(keys)) {
-    throw new Error('未填写任何 API Key');
+  const cleanUrl = String(apiUrl || '').trim();
+  if (!cleanUrl) {
+    throw new Error('请填写 API 接口地址');
   }
-  if (keys.length === 0) {
-    throw new Error('未填写任何 API Key');
+  const local = isLocalEndpoint(cleanUrl);
+  const validKeys = Array.isArray(keys) ? keys.filter(Boolean) : [];
+  if (!local && validKeys.length === 0) {
+    throw new Error('未填写任何 API Key（本地 Ollama / LM Studio 可留空）');
   }
 
+  const keysToTry = validKeys.length > 0 ? validKeys : [''];
   const store = await chrome.storage.local.get(['petKeyCursor']);
   const rawCursor = Number(store.petKeyCursor);
   const startCursor = Number.isFinite(rawCursor) ? rawCursor : 0;
-  await chrome.storage.local.set({ petKeyCursor: (startCursor + 1) % keys.length });
+  if (validKeys.length > 1) {
+    await chrome.storage.local.set({ petKeyCursor: (startCursor + 1) % validKeys.length });
+  }
 
-  const cleanUrl = apiUrl.trim();
   const isGoogleEndpoint = cleanUrl.includes('googleapis.com');
   let lastError = '请求失败';
 
-  for (let attempt = 0; attempt < keys.length; attempt++) {
-    const keyIdx = (startCursor + attempt) % keys.length;
-    const apiKey = keys[keyIdx];
+  for (let attempt = 0; attempt < keysToTry.length; attempt++) {
+    const keyIdx = (startCursor + attempt) % keysToTry.length;
+    const apiKey = keysToTry[keyIdx];
     const t0 = Date.now();
 
     const payload = {
-      model: model.trim(),
+      model: String(model || '').trim(),
       messages,
       max_tokens: maxTokens,
       temperature,
@@ -103,13 +125,15 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
       payload.reasoning_effort = 'none';
     }
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
     try {
       const response = await fetch(cleanUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
+        headers,
         body: JSON.stringify(payload)
       });
 
@@ -121,12 +145,12 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
           const errJson = await response.json();
           const msg = errJson?.error?.message ? errJson.error.message : errJson?.[0]?.error?.message;
           if (msg) {
-            errDetail += `: ${msg.slice(0, 60)}`;
+            errDetail += `: ${msg.slice(0, 80)}`;
           }
         } catch {}
-        lastError = `[Key #${keyIdx + 1}] ${errDetail}`;
+        lastError = validKeys.length > 0 ? `[Key #${keyIdx + 1}] ${errDetail}` : `[本地接口] ${errDetail}`;
 
-        if ([401, 403, 429, 500, 502, 503].includes(response.status) && attempt < keys.length - 1) {
+        if ([401, 403, 429, 500, 502, 503].includes(response.status) && attempt < keysToTry.length - 1) {
           continue;
         }
         throw new Error(lastError);
@@ -136,18 +160,19 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
       const contentStr = data.choices?.[0]?.message?.content;
       const rawReply = (typeof contentStr === 'string' ? contentStr : '').trim();
       if (!rawReply) {
-        throw new Error(`[Key #${keyIdx + 1}] 模型返回空内容`);
+        throw new Error(validKeys.length > 0 ? `[Key #${keyIdx + 1}] 模型返回空内容` : '模型返回空内容');
       }
 
       return {
         rawReply,
-        keyIndex: keyIdx + 1,
-        totalKeys: keys.length,
-        latencyMs
+        keyIndex: validKeys.length > 0 ? keyIdx + 1 : 0,
+        totalKeys: validKeys.length,
+        latencyMs,
+        isLocal: local
       };
     } catch (err) {
       lastError = err && err.message ? err.message : String(err);
-      if (attempt === keys.length - 1) {
+      if (attempt === keysToTry.length - 1) {
         throw new Error(lastError);
       }
     }
@@ -162,46 +187,39 @@ async function handleTestApi({ apiUrl, apiKeys, model }) {
   if (!apiUrl) {
     return { ok: false, error: '请填写 API 接口地址' };
   }
-  if (keys.length === 0) {
-    return { ok: false, error: '请至少填写一个 API Key' };
+  if (!isLocalEndpoint(apiUrl) && keys.length === 0) {
+    return { ok: false, error: '云端接口请至少填写一个 API Key（本地模型可留空）' };
   }
 
-  const targetModel = model ? model : 'gemini-3.1-flash-lite';
+  const targetModel = model ? model : 'gemini-2.5-flash-lite';
   const result = await requestWithKeyRotation({
     apiUrl,
     keys,
     model: targetModel,
-    messages: [
-      { role: 'user', content: '请只回复两个字：喵呜' }
-    ],
+    messages: [{ role: 'user', content: '请只回复两个字：喵呜' }],
     maxTokens: 30,
     temperature: 0.7
   });
 
   return {
     ok: true,
-    reply: result.rawReply,
+    reply: result.rawReply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim() || result.rawReply,
     keyIndex: result.keyIndex,
     totalKeys: result.totalKeys,
-    latencyMs: result.latencyMs
+    latencyMs: result.latencyMs,
+    isLocal: result.isLocal
   };
 }
 
 /* 正常生成互动吐槽 */
 async function handleGenerateComment({ userText, aiText, remainPct, triggerType }) {
   const { petAiConfig } = await chrome.storage.local.get(['petAiConfig']);
-  if (!petAiConfig) {
-    return { ok: false, reason: 'disabled' };
-  }
-  if (!petAiConfig.enabled) {
-    return { ok: false, reason: 'disabled' };
-  }
-  if (!petAiConfig.apiUrl) {
+  if (!petAiConfig || !petAiConfig.enabled || !petAiConfig.apiUrl) {
     return { ok: false, reason: 'disabled' };
   }
 
   const keys = parseApiKeys(petAiConfig.apiKeys, petAiConfig.apiKey);
-  if (keys.length === 0) {
+  if (!isLocalEndpoint(petAiConfig.apiUrl) && keys.length === 0) {
     return { ok: false, error: '未配置 API Key' };
   }
 
@@ -228,12 +246,12 @@ async function handleGenerateComment({ userText, aiText, remainPct, triggerType 
 
   const safeUserText = typeof userText === 'string' ? userText.trim() : '';
   const safeAiText = typeof aiText === 'string' ? aiText.trim() : '';
-  const hasContext = Boolean(safeUserText) ? true : Boolean(safeAiText);
+  const hasContext = Boolean(safeUserText) || Boolean(safeAiText);
   const userContent = hasContext
     ? `当前聊天上下文参考（随机种子 #${Math.floor(Math.random() * 9999)}）：\n用户问：${safeUserText.slice(0, 200)}\nAI答：${safeAiText.slice(0, 240)}`
     : `（当前是空白对话页面，随机种子 #${Math.floor(Math.random() * 9999)}）`;
 
-  const targetModel = petAiConfig.model ? petAiConfig.model : 'gemini-3.1-flash-lite';
+  const targetModel = petAiConfig.model ? petAiConfig.model : 'gemini-2.5-flash-lite';
   const result = await requestWithKeyRotation({
     apiUrl: petAiConfig.apiUrl,
     keys,
@@ -247,9 +265,10 @@ async function handleGenerateComment({ userText, aiText, remainPct, triggerType 
   });
 
   const validMoods = ['xd', 'grin', 'eat', 'idle'];
-  const match = result.rawReply.match(/^\[([a-z]+)\]\s*(.+)$/i);
+  const cleaned = result.rawReply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const match = cleaned.match(/^\[([a-z]+)\]\s*(.+)$/is);
   let finalMood = 'xd';
-  let finalText = result.rawReply.replace(/^\[.*?\]\s*/, '').trim();
+  let finalText = cleaned.replace(/^\[.*?\]\s*/, '').trim();
 
   if (match && validMoods.includes(match[1].toLowerCase())) {
     finalMood = match[1].toLowerCase();
@@ -261,8 +280,67 @@ async function handleGenerateComment({ userText, aiText, remainPct, triggerType 
   return {
     ok: true,
     mood: finalMood,
-    text: finalText,
+    text: finalText || '喵呜~',
     keyIndex: result.keyIndex,
     totalKeys: result.totalKeys
+  };
+}
+
+/* 独立多轮大模型对话窗口专用接口 */
+async function handlePetChat({ message, history, context, attachContext }) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return { ok: false, error: '消息不能为空' };
+  }
+
+  const { petAiConfig } = await chrome.storage.local.get(['petAiConfig']);
+  if (!petAiConfig || !petAiConfig.apiUrl) {
+    return { ok: false, error: '请先右键桌宠配置模型接口地址与密钥（或本地 Ollama）' };
+  }
+
+  const keys = parseApiKeys(petAiConfig.apiKeys, petAiConfig.apiKey);
+  if (!isLocalEndpoint(petAiConfig.apiUrl) && keys.length === 0) {
+    return { ok: false, error: '请先右键桌宠填写 API Key（本地模型可留空）' };
+  }
+
+  const sysParts = [
+    '你是一个常驻在 Gemini 网页端右下角的 Q 版猫娘 AI 助手，性格灵动可爱、回答清晰实用，既能陪主人闲聊也能解答技术和学习问题。'
+  ];
+  if (attachContext && context && (context.userText || context.aiText)) {
+    sysParts.push(
+      '【当前 Gemini 主页面最近一轮对话上下文参考】\n' +
+        (context.userText ? `用户：${String(context.userText).slice(0, 600)}\n` : '') +
+        (context.aiText ? `Gemini：${String(context.aiText).slice(0, 1200)}` : '')
+    );
+  }
+
+  const recentMsgs = Array.isArray(history)
+    ? history.slice(-16).map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: String(m.content || '')
+      }))
+    : [];
+
+  const targetModel = petAiConfig.model ? petAiConfig.model : 'gemini-2.5-flash-lite';
+  const result = await requestWithKeyRotation({
+    apiUrl: petAiConfig.apiUrl,
+    keys,
+    model: targetModel,
+    messages: [
+      { role: 'system', content: sysParts.join('\n\n') },
+      ...recentMsgs,
+      { role: 'user', content: text }
+    ],
+    maxTokens: 1024,
+    temperature: 0.75
+  });
+
+  const reply = result.rawReply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim() || result.rawReply;
+  return {
+    ok: true,
+    reply,
+    model: targetModel,
+    latencyMs: result.latencyMs,
+    isLocal: result.isLocal
   };
 }

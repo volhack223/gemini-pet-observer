@@ -7,7 +7,7 @@
 
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue.svg)](#en)
 [![Browser](https://img.shields.io/badge/Browser-Chrome%20%7C%20Edge-green.svg)](#en)
-[![Version](https://img.shields.io/badge/Version-v1.5.0-orange.svg)](../../releases)
+[![Version](https://img.shields.io/badge/Version-v1.6.0-orange.svg)](../../releases)
 
 **[简体中文](#zh) &nbsp;|&nbsp; [English](#en)**
 
@@ -29,7 +29,11 @@
 ### ✨ 核心特性
 
 * **无感自动校准官方额度**：每轮对话生成完毕后，通过同源隐形 `iframe` 静默读取 `/usage` 页面真实消耗并反算剩余百分比，**不弹窗、不抢焦点、不闪烁顶部标签栏**；支持点击思考气泡随时手动立即校准。
-* **🧠 AI 实时互动大脑（v1.5.0 新增）**：
+* **💬 独立大模型聊天窗 & 历史吐槽记录（v1.6.0 新增）**：
+  * **独立小窗多轮对话**：点击桌宠旁的 **「💬 对话」**（或按 `Alt + P`）随时打开独立大模型聊天窗，不干扰 Gemini 主对话，支持勾选附带当前页面上下文；支持 Google 免费版、DeepSeek 与本地 Ollama（免 Key）。
+  * **加长气泡停留 + 历史记录回看**：左侧小对话框默认停留时间延长至 **9 秒**（可在设置面板自由调节 `3s–30s`），鼠标悬停自动暂停消失；所有台词自动写入 **「📜 记录」**（保留最近 40 条），再也不怕错过。
+  * **自由拖动 & 缩放**：按住桌宠可拖到页面任意位置（靠边自动翻转弹窗），支持 `Ctrl + 滚轮` 或右键滑块分别调整宠物大小、额度气泡与对话气泡缩放。
+* **🧠 AI 实时互动大脑**：
   * **上下文实时吐槽**：每轮对话结束或鼠标戳一戳小人时，结合当前聊天内容生成灵动可爱的猫娘互动台词，并自动匹配对应表情。
   * **可视化右键配置面板**：右键点击小人即可直接在网页端配置接口，内置 **Google 免费版（`gemini-3.1-flash-lite`）** 与 **DeepSeek** 一键预设，兼容所有 OpenAI 格式接口及本地 Ollama。
   * **多 API Key 自动轮询与故障转移**：支持粘贴多个 API Key（每行一个），请求时自动按序轮询负载均衡；遇到限流（`429`）或单个 Key 异常时自动无缝切换下一个 Key 重试。
@@ -71,6 +75,9 @@ gemini-pet-observer/
 | **双击小人** | 面板切换 | 收起或重新展开头顶的额度思考气泡 |
 | **右键小人** | 设置面板 | 打开/关闭 **AI 实时互动大脑配置卡片**（支持一键测试连接） |
 | **单击思考气泡** | 手动校准 | 立即在后台无感同步 `/usage` 最新剩余百分比与重置倒计时 |
+| **按住拖动小人** | 自由挪位 | 拖到页面任意位置并自动记忆，靠左/靠上时自动翻转弹窗方向 |
+| **Ctrl + 滚轮 / 右键滑块** | 调整大小与时长 | 分别调节宠物大小、额度气泡、对话气泡缩放及气泡停留时长（`3s–30s`） |
+| **点击「💬 对话」/ `Alt+P`** | 独立聊天窗 | 打开独立大模型多轮对话窗，或切换至「📜 吐槽记录」回看历史台词 |
 
 ### ⚙️ 配置 AI 实时吐槽大脑（可选）
 
@@ -99,7 +106,7 @@ gemini-pet-observer/
 ### ✨ Key Features
 
 * **Silent Official Quota Calibration**: Automatically reads real usage data from `/usage` via a same-origin invisible `iframe` after each chat turn and calculates remaining percentages—**no pop-up tabs, no focus stealing, and no tab bar flickering**. Click the thought bubble anytime to trigger an instant manual sync.
-* **🧠 AI Real-Time Interaction Brain (New in v1.5.0)**:
+* **🧠 AI Real-Time Interaction Brain (New in v1.6.0)**:
   * **Context-Aware Reactions**: Generates lively, context-aware chibi catgirl comments after AI responses finish or when you poke the pet, automatically matching expressions to the mood.
   * **Right-Click Visual Settings Panel**: Right-click the pet directly on the webpage to configure your API—includes one-click presets for **Google Free API (`gemini-3.1-flash-lite`)** and **DeepSeek**, compatible with any OpenAI-format endpoint or local Ollama.
   * **Multi-API Key Rotation & Failover**: Paste multiple API keys (one per line) for round-robin load balancing. Automatically fails over to the next key if a rate limit (`429`) or key error occurs.
@@ -141,6 +148,9 @@ gemini-pet-observer/
 | **Double-Click Pet** | Toggle panel | Collapses or expands the overhead quota thought bubble |
 | **Right-Click Pet** | Settings card | Opens/closes the **AI Interaction Brain** config panel (with built-in connection test) |
 | **Click Thought Bubble** | Manual sync | Immediately calibrates remaining 5h/weekly quota & reset countdown in the background |
+| **Drag Pet** | Move freely | Drag anywhere in the viewport with auto-saved position & smart edge-flipping popups |
+| **Ctrl + Wheel / Right-Click Sliders** | Resize & Duration | Independently scale pet, quota bubble, speech bubble, and display duration (`3s–30s`) |
+| **Click 「💬 对话」/ `Alt+P`** | Standalone Chat & History | Open an independent multi-turn LLM chat drawer or browse the last 40 pet speech logs |
 
 ### ⚙️ Configuring the AI Interaction Brain (Optional)
 

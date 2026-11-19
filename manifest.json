@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gemini 桌宠观察窗 (Gemini Pet Observer)",
-  "version": "1.5.0",
-  "description": "在 Gemini 网页端右下角常驻 Q 版二次元桌宠，支持 AI 实时上下文吐槽互动、果冻 Q 弹、表情切换及无感额度监控。",
+  "version": "1.6.0",
+  "description": "在 Gemini 网页端常驻 Q 版二次元桌宠，支持自由拖动、宠物与气泡缩放、独立大模型聊天窗、历史吐槽记录、AI 实时上下文互动及无感额度监控。",
   "icons": {
     "48": "icon.png",
     "128": "icon.png"
