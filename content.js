@@ -64,7 +64,7 @@
   const PRESETS = {
     google: {
       apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-      model: 'gemini-2.5-flash-lite'
+      model: 'gemini-3.5-flash-lite'
     },
     deepseek: {
       apiUrl: 'https://api.deepseek.com/chat/completions',
@@ -119,6 +119,8 @@
     posBottom: 0,
     globalMode: true,
     autoPageComment: true,
+    autoPageCooldownSec: 20,
+    visionEnabled: true,
     hiddenHosts: []
   };
 
@@ -724,8 +726,17 @@
               <input type="checkbox" id="cfg-global-mode" checked />
             </div>
             <div class="switch-line">
-              <span>打开新网页自动吐槽（10s 全局节流）</span>
+              <span>打开新网页自动吐槽（切走自动取消）</span>
               <input type="checkbox" id="cfg-auto-page" checked />
+            </div>
+            <div class="switch-line">
+              <span>📸 识图模式（附带截图看图/视频，阅后即焚）</span>
+              <input type="checkbox" id="cfg-vision-enabled" checked />
+            </div>
+            <div class="slider-row">
+              <span>自动冷却</span>
+              <input type="range" id="cfg-page-cooldown" min="5" max="120" step="5" value="20" />
+              <span class="val" id="cfg-page-cooldown-val">20s</span>
             </div>
           </div>
 
@@ -777,8 +788,25 @@
             <textarea id="cfg-keys" placeholder="AIzaSy... (支持粘贴多个 Key，每行一个或逗号分隔)"></textarea>
           </div>
           <div class="settings-row">
-            <label>模型名称</label>
-            <input type="text" id="cfg-model" placeholder="gemini-2.5-flash-lite" />
+            <div class="label-line">
+              <label>模型名称（可手填、下拉快选或一键获取）</label>
+              <button class="btn-mini" id="cfg-fetch-models" type="button">一键获取模型</button>
+            </div>
+            <input type="text" id="cfg-model" placeholder="gemini-3.5-flash-lite" />
+            <select id="cfg-model-select" style="border:1.5px solid #cbd5e1;border-radius:6px;padding:4px 6px;font-size:11.5px;background:#f8fafc;color:#111827;font-family:ui-monospace,Consolas,monospace;margin-top:2px;">
+              <option value="">-- 常用模型快捷选择 --</option>
+              <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (最快·推荐)</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (高性价比)</option>
+              <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (最新 Lite)</option>
+              <option value="gemini-3.8-flash">gemini-3.8-flash (高智商 Flash)</option>
+              <option value="gemini-3.6-flash">gemini-3.6-flash (均衡 Flash)</option>
+              <option value="gemini-flash-latest">gemini-flash-latest (最新 Flash)</option>
+              <option value="gemini-4-hydrogen">gemini-4-hydrogen (Gemini 4 高效)</option>
+              <option value="gemini-4-neon">gemini-4-neon (Gemini 4 旗舰)</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (经典轻量)</option>
+              <option value="deepseek-chat">deepseek-chat (DeepSeek)</option>
+              <option value="qwen2.5:7b">qwen2.5:7b (Ollama 本地)</option>
+            </select>
           </div>
           <div class="test-result" id="test-result"></div>
           <div class="btn-row">
@@ -888,6 +916,9 @@
 
   const cfgGlobalModeEl = shadow.getElementById('cfg-global-mode');
   const cfgAutoPageEl = shadow.getElementById('cfg-auto-page');
+  const cfgVisionEnabledEl = shadow.getElementById('cfg-vision-enabled');
+  const cfgPageCooldownEl = shadow.getElementById('cfg-page-cooldown');
+  const cfgPageCooldownValEl = shadow.getElementById('cfg-page-cooldown-val');
   const cfgPetSizeEl = shadow.getElementById('cfg-pet-size');
   const cfgPetSizeValEl = shadow.getElementById('cfg-pet-size-val');
   const cfgBubbleScaleEl = shadow.getElementById('cfg-bubble-scale');
@@ -901,6 +932,7 @@
   const cfgUrlEl = shadow.getElementById('cfg-url');
   const cfgKeysEl = shadow.getElementById('cfg-keys');
   const cfgModelEl = shadow.getElementById('cfg-model');
+  const cfgModelSelectEl = shadow.getElementById('cfg-model-select');
   const keyCountBadgeEl = shadow.getElementById('key-count-badge');
   const testResultEl = shadow.getElementById('test-result');
 
@@ -1253,7 +1285,12 @@
     cfgVoiceSecEl.value = String(voiceDurationSec);
     cfgVoiceSecValEl.textContent = `${voiceDurationSec}s`;
     cfgGlobalModeEl.checked = Boolean(state.globalMode);
+    const cooldownSec = clamp(Number(state.autoPageCooldownSec) || 20, 5, 120);
+    state.autoPageCooldownSec = cooldownSec;
     cfgAutoPageEl.checked = Boolean(state.autoPageComment);
+    cfgVisionEnabledEl.checked = state.visionEnabled !== false;
+    cfgPageCooldownEl.value = String(cooldownSec);
+    cfgPageCooldownValEl.textContent = `${cooldownSec}s`;
   }
 
   window.addEventListener('resize', applyLayout);
@@ -1269,6 +1306,12 @@
   cfgVoiceSecEl.addEventListener('input', () => { state.voiceDurationSec = Number(cfgVoiceSecEl.value); applyLayout(); scheduleSaveLayout(); });
   cfgGlobalModeEl.addEventListener('change', () => { state.globalMode = cfgGlobalModeEl.checked; saveState(); applyLayout(); });
   cfgAutoPageEl.addEventListener('change', () => { state.autoPageComment = cfgAutoPageEl.checked; saveState(); });
+  cfgVisionEnabledEl.addEventListener('change', () => { state.visionEnabled = cfgVisionEnabledEl.checked; saveState(); });
+  cfgPageCooldownEl.addEventListener('input', () => {
+    state.autoPageCooldownSec = Number(cfgPageCooldownEl.value);
+    cfgPageCooldownValEl.textContent = `${state.autoPageCooldownSec}s`;
+    scheduleSaveLayout();
+  });
 
   shadow.getElementById('cfg-hide-host').addEventListener('click', () => {
     const list = Array.isArray(state.hiddenHosts) ? [...state.hiddenHosts] : [];
@@ -1315,7 +1358,7 @@
     if (!dragActive) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    if (!dragMoved && Math.hypot(dx, dy) > 5) {
+    if (!dragMoved && Math.hypot(dx, dy) > 8) {
       dragMoved = true;
       petBtnEl.classList.add('dragging');
     }
@@ -1527,6 +1570,45 @@
   });
   shadow.getElementById('cfg-cancel').addEventListener('click', closeAllPopups);
 
+  cfgModelSelectEl.addEventListener('change', () => {
+    if (cfgModelSelectEl.value) {
+      cfgModelEl.value = cfgModelSelectEl.value;
+    }
+  });
+
+  shadow.getElementById('cfg-fetch-models').addEventListener('click', () => {
+    testResultEl.className = 'test-result show';
+    testResultEl.textContent = '⏳ 正在向接口拉取可用模型列表...';
+    chrome.runtime.sendMessage(
+      {
+        type: 'LIST_PET_MODELS',
+        payload: {
+          apiUrl: cfgUrlEl.value.trim() || DEFAULT_AI_CONFIG.apiUrl,
+          apiKeys: cfgKeysEl.value
+        }
+      },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          testResultEl.className = 'test-result show err';
+          testResultEl.textContent = `❌ 获取失败: ${chrome.runtime.lastError.message}`;
+          return;
+        }
+        if (res && res.ok && Array.isArray(res.models) && res.models.length > 0) {
+          const curVal = cfgModelEl.value.trim();
+          cfgModelSelectEl.innerHTML =
+            `<option value="">-- 已拉取 ${res.models.length} 个可用模型 --</option>` +
+            res.models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+          if (res.models.includes(curVal)) cfgModelSelectEl.value = curVal;
+          testResultEl.className = 'test-result show ok';
+          testResultEl.textContent = `✅ 已获取 ${res.models.length} 个模型，可在上方下拉框直接切换。`;
+        } else {
+          testResultEl.className = 'test-result show err';
+          testResultEl.textContent = `❌ 获取模型失败: ${res && res.error ? res.error : '请检查接口地址与 API Key'}`;
+        }
+      }
+    );
+  });
+
   shadow.getElementById('cfg-test').addEventListener('click', () => {
     testResultEl.className = 'test-result show';
     testResultEl.textContent = '⏳ 正在向接口发送测试请求...';
@@ -1623,7 +1705,9 @@
 
       if (canClickAi) {
         lastClickAiTime = now;
-        showVoiceLine('喵呜？让我想想…', { durationMs: 4000, saveLog: false });
+        showVoiceLine('喵呜？让我想想…', { durationMs: 15000, saveLog: false });
+        cancelPendingAutoPage();
+        pageAutoReacted = true;
         if (isGeminiSite) {
           triggerAiPetReaction('click');
         } else {
@@ -1701,46 +1785,159 @@
       feed: extra.feedInfo ? `投喂 · ${extra.feedInfo.itemName}` : '投喂互动'
     };
 
-    chrome.runtime.sendMessage(
-      {
-        type: 'GENERATE_PET_COMMENT',
-        payload: {
-          userText: ctx.userText,
-          aiText: ctx.aiText,
-          remainPct: Math.round(state.exactFiveHourPct),
-          triggerType,
-          pageInfo: extra.pageInfo || null,
-          feedInfo: extra.feedInfo || null
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'GENERATE_PET_COMMENT',
+          payload: {
+            userText: ctx.userText,
+            aiText: ctx.aiText,
+            remainPct: Math.round(state.exactFiveHourPct),
+            triggerType,
+            pageInfo: extra.pageInfo || null,
+            feedInfo: extra.feedInfo || null,
+            wantVision: state.visionEnabled !== false,
+            extraFrames: extra.extraFrames || null
+          }
+        },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            if (triggerType !== 'page_open') {
+              const msg = chrome.runtime.lastError.message || '';
+              const hint = /invalidated|receiving end/i.test(msg)
+                ? '扩展刚更新，请刷新当前网页后再试喵~'
+                : `通信异常: ${msg}`;
+              showVoiceLine(`⚠️ ${hint}`, { durationMs: 6000, saveLog: false });
+            }
+            return;
+          }
+          if (res && res.ok && res.text) {
+            playJellyBounce();
+            triggerTempExpression(res.mood || 'xd', 4200);
+            showVoiceLine(res.text, { source: srcMap[triggerType] || 'AI 互动' });
+          } else if (res && res.error && triggerType !== 'page_open') {
+            showVoiceLine(`⚠️ ${res.error}`, { durationMs: 6000, saveLog: false });
+          }
         }
-      },
-      (res) => {
-        if (res && res.ok && res.text) {
-          playJellyBounce();
-          triggerTempExpression(res.mood || 'xd', 4200);
-          showVoiceLine(res.text, { source: srcMap[triggerType] || 'AI 互动' });
-        } else if (res && res.error && triggerType !== 'page_open') {
-          showVoiceLine(`⚠️ ${res.error}`, { durationMs: 5000, saveLog: false });
-        }
+      );
+    } catch (err) {
+      if (triggerType !== 'page_open') {
+        showVoiceLine('⚠️ 扩展刚更新，请刷新当前网页后再试喵~', { durationMs: 6000, saveLog: false });
       }
-    );
+    }
   }
 
-  /* 全网页打开自动围观（每页仅 1 次，跨标签页 10 秒全局节流） */
-  function maybeTriggerAutoPageComment() {
-    if (pageAutoReacted || isGeminiSite || document.hidden) return;
-    if (!shouldRenderOnThisPage() || !state.autoPageComment || !aiConfig.enabled) return;
-    const hasKeysOrLocal = isLocalUrl(aiConfig.apiUrl) || countKeys(aiConfig.apiKeys) > 0;
-    if (!aiConfig.apiUrl || !hasKeysOrLocal) return;
+  /* 全网页打开自动围观：普通网页停留 2.2s 单帧识图；视频网页按 3s / 10s / 20s 三帧连拍识图（切走立刻取消并清零内存） */
+  let autoPageTimers = [];
+  let videoSampleFrames = [];
 
+  function hasVideoElement() {
+    const vids = document.querySelectorAll('video');
+    for (const v of vids) {
+      const rect = v.getBoundingClientRect();
+      if (rect.width >= 160 && rect.height >= 90) return true;
+    }
+    return false;
+  }
+
+  function cancelPendingAutoPage() {
+    while (autoPageTimers.length) {
+      clearTimeout(autoPageTimers.pop());
+    }
+    videoSampleFrames = [];
+  }
+
+  function requestMemoryFrame(quality = 38) {
+    return new Promise((resolve) => {
+      if (document.hidden || !document.hasFocus()) {
+        resolve(null);
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage({ type: 'CAPTURE_TAB_FRAME', payload: { quality } }, (res) => {
+          if (chrome.runtime.lastError || !res || !res.ok || !res.dataUrl) {
+            resolve(null);
+          } else {
+            resolve(res.dataUrl);
+          }
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) cancelPendingAutoPage();
+  });
+  window.addEventListener('blur', cancelPendingAutoPage);
+
+  function scheduleAutoPageComment() {
+    if (pageAutoReacted || isGeminiSite || document.hidden) return;
+    cancelPendingAutoPage();
+    const t = setTimeout(() => {
+      if (pageAutoReacted || document.hidden || !document.hasFocus()) return;
+      if (!shouldRenderOnThisPage() || !state.autoPageComment || !aiConfig.enabled) return;
+      const hasKeysOrLocal = isLocalUrl(aiConfig.apiUrl) || countKeys(aiConfig.apiKeys) > 0;
+      if (!aiConfig.apiUrl || !hasKeysOrLocal) return;
+
+      const cooldownMs = clamp(Number(state.autoPageCooldownSec) || 20, 5, 120) * 1000;
+      chrome.storage.local.get(['petLastAutoPageAt'], (res) => {
+        if (pageAutoReacted || document.hidden || !document.hasFocus()) return;
+        const lastAt = Number(res.petLastAutoPageAt) || 0;
+        if (Date.now() - lastAt < cooldownMs) return;
+
+        // 检测到视频元素且开启识图时：在第 3s / 10s / 20s 分别采样一帧（相对页面打开时间，此时已过 2.2s）
+        if (state.visionEnabled !== false && hasVideoElement()) {
+          startVideoThreeFrameSampling();
+        } else {
+          dispatchAutoPageComment(null);
+        }
+      });
+    }, 2200);
+    autoPageTimers.push(t);
+  }
+
+  function startVideoThreeFrameSampling() {
+    videoSampleFrames = [];
+    // 已经停留了 2.2s，因此再过 0.8s (约第3s)、7.8s (约第10s)、17.8s (约第20s) 采样三帧
+    const delays = [800, 7800, 17800];
+    delays.forEach((delay, idx) => {
+      const timer = setTimeout(async () => {
+        if (pageAutoReacted || document.hidden || !document.hasFocus()) {
+          cancelPendingAutoPage();
+          return;
+        }
+        const frame = await requestMemoryFrame(38);
+        if (pageAutoReacted || document.hidden || !document.hasFocus()) {
+          cancelPendingAutoPage();
+          return;
+        }
+        if (frame) videoSampleFrames.push(frame);
+        if (idx === delays.length - 1) {
+          const captured = [...videoSampleFrames];
+          videoSampleFrames = [];
+          dispatchAutoPageComment(captured);
+        }
+      }, delay);
+      autoPageTimers.push(timer);
+    });
+  }
+
+  function dispatchAutoPageComment(extraFrames) {
+    if (pageAutoReacted || isGeminiSite || document.hidden || !document.hasFocus()) {
+      cancelPendingAutoPage();
+      return;
+    }
     pageAutoReacted = true;
     const now = Date.now();
-    chrome.storage.local.get(['petLastAutoPageAt'], (res) => {
-      const lastAt = Number(res.petLastAutoPageAt) || 0;
-      if (now - lastAt < 10000) return; // 10 秒全局跨标签页冷却内不触发
-      chrome.storage.local.set({ petLastAutoPageAt: now }, () => {
-        const info = extractCurrentPageInfo();
-        if (!info.title && info.snippet.length < 20) return;
-        triggerAiPetReaction('page_open', { pageInfo: info });
+    chrome.storage.local.set({ petLastAutoPageAt: now }, () => {
+      if (document.hidden || !document.hasFocus()) return;
+      const info = extractCurrentPageInfo();
+      if (!info.title && info.snippet.length < 20 && (!extraFrames || extraFrames.length === 0) && state.visionEnabled === false) return;
+      triggerAiPetReaction('page_open', {
+        pageInfo: info,
+        extraFrames: extraFrames && extraFrames.length > 0 ? extraFrames : null
       });
     });
   }
@@ -1829,13 +2026,25 @@
       if (isGeminiSite && !location.pathname.startsWith('/usage')) {
         setTimeout(() => triggerSilentSync(true), 2000);
       } else if (!isGeminiSite) {
-        setTimeout(maybeTriggerAutoPageComment, 1600);
+        scheduleAutoPageComment();
       }
     }
   );
 
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.geminiPetState?.newValue) { state = { ...state, ...changes.geminiPetState.newValue }; renderUI(); }
+    if (changes.geminiPetState?.newValue) {
+      const nv = changes.geminiPetState.newValue;
+      const layoutChanged =
+        nv.petSize !== state.petSize ||
+        nv.bubbleScale !== state.bubbleScale ||
+        nv.voiceScale !== state.voiceScale ||
+        nv.posRight !== state.posRight ||
+        nv.posBottom !== state.posBottom ||
+        nv.globalMode !== state.globalMode ||
+        JSON.stringify(nv.hiddenHosts || []) !== JSON.stringify(state.hiddenHosts || []);
+      state = { ...state, ...nv };
+      if (isGeminiSite || layoutChanged) renderUI();
+    }
     if (changes.petAiConfig?.newValue) {
       const nv = changes.petAiConfig.newValue;
       aiConfig = { ...DEFAULT_AI_CONFIG, ...nv, apiKeys: nv.apiKeys || nv.apiKey || '' };

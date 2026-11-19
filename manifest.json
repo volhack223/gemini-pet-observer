@@ -1,18 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Gemini 桌宠观察窗 (Gemini Pet Observer)",
-  "version": "2.0.0",
-  "description": "全网页冲浪 AI 桌宠与 Gemini 无感额度监控：支持任意网页智能围观（10秒全局节流）、性格×行为双维人设、随机心情、正负双向好感度与投喂道具、独立大模型聊天窗及自由拖动缩放。",
+  "version": "2.1.1",
+  "description": "全网页冲浪 AI 桌宠与 Gemini 无感额度监控：支持视频页 3s/10s/20s 三帧连拍识图、普通页实时截屏识图（阅后即焚零落盘）、自定义冷却、切走取消、性格×行为人设、随机心情、双向好感度投喂与独立对话窗。",
   "icons": {
     "48": "icon.png",
     "128": "icon.png"
   },
-  "permissions": ["storage", "declarativeNetRequest"],
+  "permissions": [
+    "storage",
+    "declarativeNetRequest"
+  ],
   "host_permissions": [
     "https://gemini.google.com/*",
     "https://*/*",
     "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -28,16 +32,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "all_frames": true,
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["*.webp", "*.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "*.webp",
+        "*.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

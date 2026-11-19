@@ -1,6 +1,6 @@
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GENERATE_PET_COMMENT') {
-    handleGenerateComment(msg.payload)
+    handleGenerateComment(msg.payload, sender)
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ ok: false, error: err && err.message ? err.message : String(err) }));
     return true;
@@ -17,6 +17,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     handlePetChat(msg.payload)
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ ok: false, error: err && err.message ? err.message : String(err) }));
+    return true;
+  }
+
+  if (msg.type === 'LIST_PET_MODELS') {
+    handleListModels(msg.payload)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ ok: false, models: [], error: err && err.message ? err.message : String(err) }));
+    return true;
+  }
+
+  if (msg.type === 'CAPTURE_TAB_FRAME') {
+    const q = Math.max(25, Math.min(80, Number(msg.payload && msg.payload.quality) || 38));
+    captureActiveTabJpeg(sender, q)
+      .then((dataUrl) => sendResponse({ ok: Boolean(dataUrl), dataUrl }))
+      .catch(() => sendResponse({ ok: false, dataUrl: null }));
     return true;
   }
 });
@@ -172,13 +187,12 @@ async function buildPersonaInstruction() {
   const { activeTrait, activeBehavior, customNote, affection, stage } = await getActivePersona();
 
   const lines = [
-    `【最高优先级角色扮演指令：${activeTrait.name} × ${activeBehavior.name}】`,
-    `你现在必须 100% 沉浸扮演该角色，完全抛弃普通客服腔调：`,
-    `1. 性格底色【${activeTrait.name}】：${activeTrait.desc}`,
+    `【核心原则：页面内容为先，人设与好感度作为语气衬托】`,
+    `你是一个常驻在浏览器右下角的二次元桌宠。如果下方提供了当前对话或网页内容，必须紧扣其中的具体话题、事务或关键词来吐槽、评价或互动；不要脱离画面内容自顾自刷情话或空喊口号。`,
+    `【当前语气底色：${activeTrait.name} × ${activeBehavior.name} · 好感度 ${affection}/100（${stage.label}）】`,
+    `1. 性格口吻【${activeTrait.name}】：${activeTrait.desc}`,
     `2. 行为倾向【${activeBehavior.name}】：${activeBehavior.desc}`,
-    `3. 【核心情绪权重 · 好感度 ${affection}/100（${stage.label} · ${stage.intensity}）】：`,
-    `   - 态度指导：${stage.hint}`,
-    `   - 该好感度下的语气参考（务必体现出这个好感度的强烈情绪落差！）：${stage.sample}`
+    `3. 好感度态度衬托【${stage.label} · ${stage.intensity}】：${stage.hint}（语气参考：${stage.sample}）`
   ];
   if (activeTrait.catchphrases) {
     lines.push(`4. 性格口癖词库（按需自然选用，不必每次全堆）：${activeTrait.catchphrases}`);
@@ -283,7 +297,8 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
       top_p: 0.95
     };
 
-    if (isGoogleEndpoint) {
+    // 仅对 Gemini 2.5 系列传 reasoning_effort: 'none'；Gemini 3.x / 3.5 默认 minimal，传 none 会报 HTTP 400
+    if (isGoogleEndpoint && /gemini-2\.5/i.test(String(model || ''))) {
       payload.reasoning_effort = 'none';
     }
 
@@ -292,12 +307,16 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     try {
       const response = await fetch(cleanUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       const latencyMs = Date.now() - t0;
 
@@ -331,7 +350,10 @@ async function requestWithKeyRotation({ apiUrl, keys, model, messages, maxTokens
         isLocal: local
       };
     } catch (err) {
-      lastError = err && err.message ? err.message : String(err);
+      clearTimeout(timeoutId);
+      lastError = err && err.name === 'AbortError'
+        ? '请求超时 (25s)，请检查网络或模型服务'
+        : (err && err.message ? err.message : String(err));
       if (attempt === keysToTry.length - 1) {
         throw new Error(lastError);
       }
@@ -354,7 +376,7 @@ async function handleTestApi({ apiUrl, apiKeys, model }) {
     keys,
     model: targetModel,
     messages: [{ role: 'user', content: '请只回复两个字：喵呜' }],
-    maxTokens: 30,
+    maxTokens: 128,
     temperature: 0.7
   });
 
@@ -368,7 +390,20 @@ async function handleTestApi({ apiUrl, apiKeys, model }) {
   };
 }
 
-async function handleGenerateComment({ userText, aiText, remainPct, triggerType, pageInfo, feedInfo }) {
+async function captureActiveTabJpeg(sender, quality = 50) {
+  try {
+    if (!sender || !sender.tab || !sender.tab.active) return null;
+    const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, {
+      format: 'jpeg',
+      quality
+    });
+    return typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') ? dataUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleGenerateComment({ userText, aiText, remainPct, triggerType, pageInfo, feedInfo, wantVision, extraFrames }, sender) {
   const { petAiConfig } = await chrome.storage.local.get(['petAiConfig']);
   if (!petAiConfig || !petAiConfig.enabled || !petAiConfig.apiUrl) {
     return { ok: false, reason: 'disabled' };
@@ -404,29 +439,78 @@ async function handleGenerateComment({ userText, aiText, remainPct, triggerType,
     userContent = `情境：对方刚刚给你投喂了「${feedInfo.itemName}」（${feedInfo.itemNote}），你的真实反应是：${dir}。请立刻用${roleTag}的口吻给出吃下或拒绝的台词（种子 #${seed}）。`;
   } else if ((triggerType === 'page_open' || triggerType === 'page_click') && pageInfo) {
     const actionText = triggerType === 'page_open' ? '对方刚刚打开了这个网页' : '对方戳了你一下，想听你点评当前正在看的网页';
-    userContent = `情境：${actionText}。请用${roleTag}的口吻结合网页内容说一句（种子 #${seed}）：\n网页标题：${String(pageInfo.title || '').slice(0, 80)}\n网页摘要：${String(pageInfo.snippet || '').slice(0, 260)}`;
+    userContent = `情境：${actionText}。请紧扣网页标题与正文里的具体内容来吐槽或评论，并用${roleTag}作为语气和态度衬托（种子 #${seed}）：\n网页标题：${String(pageInfo.title || '').slice(0, 80)}\n网页摘要：${String(pageInfo.snippet || '').slice(0, 260)}`;
   } else if (triggerType === 'click') {
-    userContent = `${pickRandom(CLICK_PLAYBOOKS)}请立刻用${roleTag}的口吻回应（种子 #${seed}）。`;
+    const safeUserText = typeof userText === 'string' ? userText.trim() : '';
+    const safeAiText = typeof aiText === 'string' ? aiText.trim() : '';
+    userContent = safeUserText || safeAiText
+      ? `${pickRandom(CLICK_PLAYBOOKS)}请优先结合下方当前页面正在聊的具体内容/事务，用${roleTag}的口吻吐槽或回应一句（人设和好感度用来衬托语气，种子 #${seed}）：\n用户问：${safeUserText.slice(0, 180)}\nAI答：${safeAiText.slice(0, 220)}`
+      : `${pickRandom(CLICK_PLAYBOOKS)}当前是空白页，请用${roleTag}的口吻回应（种子 #${seed}）。`;
   } else {
     const safeUserText = typeof userText === 'string' ? userText.trim() : '';
     const safeAiText = typeof aiText === 'string' ? aiText.trim() : '';
     userContent = safeUserText || safeAiText
-      ? `${pickRandom(REPLY_PLAYBOOKS)}请用${roleTag}的口吻点评下面这轮对话（当前额度剩余 ${remainPct}%，种子 #${seed}）：\n用户问：${safeUserText.slice(0, 180)}\nAI答：${safeAiText.slice(0, 220)}`
+      ? `${pickRandom(REPLY_PLAYBOOKS)}请紧扣下方对话里的具体主题和内容，用${roleTag}的语气点评或吐槽一句（好感度与性格仅作为语气衬托，种子 #${seed}）：\n用户问：${safeUserText.slice(0, 180)}\nAI答：${safeAiText.slice(0, 220)}`
       : `${pickRandom(REPLY_PLAYBOOKS)}请用${roleTag}的口吻说一句话（种子 #${seed}）。`;
   }
 
   const targetModel = petAiConfig.model ? petAiConfig.model : 'gemini-2.5-flash-lite';
-  const result = await requestWithKeyRotation({
-    apiUrl: petAiConfig.apiUrl,
-    keys,
-    model: targetModel,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent }
-    ],
-    maxTokens: 140,
-    temperature: 1.02
-  });
+  let frames = [];
+  if (wantVision && Array.isArray(extraFrames) && extraFrames.length > 0) {
+    frames = extraFrames.filter((u) => typeof u === 'string' && u.startsWith('data:image/')).slice(0, 3);
+  } else if (wantVision && (triggerType === 'page_open' || triggerType === 'page_click')) {
+    const single = await captureActiveTabJpeg(sender, 50);
+    if (single) frames.push(single);
+  }
+
+  let userMessageContent = userContent;
+  if (frames.length > 1) {
+    userMessageContent = [
+      { type: 'text', text: userContent + `\n（已按时间顺序附带该视频页面连续 ${frames.length} 帧画面截图 [3s / 10s / 20s]，请结合连续画面变化、人物动作或剧情细节来吐槽/评论！）` },
+      ...frames.map((url) => ({ type: 'image_url', image_url: { url } }))
+    ];
+  } else if (frames.length === 1) {
+    userMessageContent = [
+      { type: 'text', text: userContent + '\n（已附带当前屏幕实时画面截图，请优先结合你看到的图片、视频画面或排版细节来吐槽/评论！）' },
+      { type: 'image_url', image_url: { url: frames[0] } }
+    ];
+  }
+
+  let result;
+  try {
+    result = await requestWithKeyRotation({
+      apiUrl: petAiConfig.apiUrl,
+      keys,
+      model: targetModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessageContent }
+      ],
+      maxTokens: 512,
+      temperature: 1.02
+    });
+  } catch (err) {
+    // 若当前模型不支持图片或多图（返回 400/422），自动降级为纯文本重发
+    if (frames.length > 0 && /HTTP 400|HTTP 422|vision|image|multimodal/i.test(String(err && err.message))) {
+      frames.length = 0;
+      result = await requestWithKeyRotation({
+        apiUrl: petAiConfig.apiUrl,
+        keys,
+        model: targetModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent }
+        ],
+        maxTokens: 512,
+        temperature: 1.02
+      });
+    } else {
+      frames.length = 0;
+      throw err;
+    }
+  }
+  // 阅后即焚：立即释放内存中的所有帧，绝不落盘存储
+  frames.length = 0;
 
   const validMoods = ['xd', 'grin', 'eat', 'idle'];
   const cleaned = result.rawReply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -511,4 +595,74 @@ async function handlePetChat({ message, history, context, attachContext, pageInf
     latencyMs: result.latencyMs,
     isLocal: result.isLocal
   };
+}
+
+
+/* 一键获取当前接口可用模型列表（兼容 Google OpenAI /models、通用 /v1/models 及 Ollama /api/tags） */
+async function handleListModels({ apiUrl, apiKeys }) {
+  const cleanUrl = String(apiUrl || '').trim();
+  if (!cleanUrl) return { ok: false, models: [], error: '请先填写 API 接口地址' };
+  const keys = parseApiKeys(apiKeys, '');
+  const local = isLocalEndpoint(cleanUrl);
+  if (!local && keys.length === 0) {
+    return { ok: false, models: [], error: '请先填写至少一个 API Key 再获取模型列表' };
+  }
+
+  const parsed = new URL(cleanUrl);
+  const origin = `${parsed.protocol}//${parsed.host}`;
+  const candidates = [];
+
+  if (cleanUrl.includes('/chat/completions')) {
+    candidates.push(cleanUrl.replace(/\/chat\/completions\/?$/i, '/models'));
+  }
+  if (local) {
+    candidates.push(`${origin}/api/tags`, `${origin}/v1/models`);
+  } else {
+    candidates.push(`${origin}/v1/models`);
+  }
+
+  const uniqueUrls = [...new Set(candidates)];
+  const headers = keys[0] ? { Authorization: `Bearer ${keys[0]}` } : {};
+  const found = new Set();
+  let lastErr = '';
+
+  for (const url of uniqueUrls) {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 12000);
+    try {
+      const resp = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      clearTimeout(tid);
+      if (!resp.ok) {
+        lastErr = `HTTP ${resp.status}`;
+        continue;
+      }
+      const json = await resp.json();
+      if (Array.isArray(json.data)) {
+        for (const item of json.data) {
+          if (item && item.id) {
+            const id = String(item.id).replace(/^models\//i, '').trim();
+            if (id && !/embedding|tts|transcribe|lyria|imagen|veo|aqa|robotics/i.test(id)) {
+              found.add(id);
+            }
+          }
+        }
+      }
+      if (Array.isArray(json.models)) {
+        for (const item of json.models) {
+          const id = String((item && (item.name || item.id)) || '').replace(/^models\//i, '').trim();
+          if (id) found.add(id);
+        }
+      }
+      if (found.size > 0) break;
+    } catch (e) {
+      clearTimeout(tid);
+      lastErr = e && e.message ? e.message : String(e);
+    }
+  }
+
+  const models = [...found].sort((a, b) => a.localeCompare(b));
+  if (models.length === 0) {
+    return { ok: false, models: [], error: lastErr || '未获取到可用模型列表' };
+  }
+  return { ok: true, models };
 }
